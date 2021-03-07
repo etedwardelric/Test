@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: MIT
 
-pragma solidity 0.6.12;
+pragma solidity ^0.8.0;
 
-import "@openzeppelin/contracts/math/SafeMath.sol";
-import "./libs/IBEP20.sol";
-import "./libs/SafeBEP20.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {SafeMath} from "https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/utils/math/SafeMath.sol";
+import {Ownable} from "https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/access/Ownable.sol";
+import {ReentrancyGuard} from "https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/security/ReentrancyGuard.sol";
 
-import "./MarsToken.sol";
+import {IBEP20} from "./libs/SafeBEP20.sol";
+import {SafeBEP20} from "./libs/SafeBEP20.sol";
+import {MarsToken} from "./MarsToken.sol";
+import {LockedTokenVault} from "./LockedTokenVault.sol";
 
 // MasterChef is the master of Mars. He can make Mars and he is a fair guy.
 //
@@ -44,24 +45,26 @@ contract MasterChef is Ownable, ReentrancyGuard {
         uint256 allocPoint;       // How many allocation points assigned to this pool. Mars to distribute per block.
         uint256 lastRewardBlock;  // Last block number that Mars distribution occurs.
         uint256 accMarsPerShare;   // Accumulated Mars per share, times 1e12. See below.
-        uint16 depositFeeBP;      // Deposit fee in basis points
     }
 
     // The Mars TOKEN!
     MarsToken public mars;
-    // Dev address.
-    address public devaddr;
-    // Mars tokens created per block.
-    uint256 public marsPerBlock;
-    // Bonus muliplier for early Mars makers.
-    uint256 public constant BONUS_MULTIPLIER = 1;
-    // Deposit Fee address
-    address public feeAddress;
-
+    // The Locked Mars TOKEN!
+    LockedTokenVault public lockedTokenVault;
     // Info of each pool.
     PoolInfo[] public poolInfo;
     // Info of each user that stakes LP tokens.
     mapping(uint256 => mapping(address => UserInfo)) public userInfo;
+    
+    // Dev address.
+    address public devAddress;
+    // Project treasory Fee address
+    address public pjtrAddress;
+
+    // Mars tokens created per block.
+    uint256 public marsPerBlock;
+    // Bonus muliplier for early Mars makers.
+    uint256 public constant BONUS_MULTIPLIER = 1;
     // Total allocation points. Must be the sum of all allocation points in all pools.
     uint256 public totalAllocPoint = 0;
     // The block number when Mars mining starts.
@@ -70,22 +73,25 @@ contract MasterChef is Ownable, ReentrancyGuard {
     event Deposit(address indexed user, uint256 indexed pid, uint256 amount);
     event Withdraw(address indexed user, uint256 indexed pid, uint256 amount);
     event EmergencyWithdraw(address indexed user, uint256 indexed pid, uint256 amount);
-    event SetFeeAddress(address indexed user, address indexed newAddress);
+    event SetPjtrAddress(address indexed user, address indexed newAddress);
     event SetDevAddress(address indexed user, address indexed newAddress);
     event UpdateEmissionRate(address indexed user, uint256 goosePerBlock);
 
     constructor(
         MarsToken _mars,
-        address _devaddr,
-        address _feeAddress,
+        address _devAddress,
+        address _pjtrAddress,
         uint256 _marsPerBlock,
-        uint256 _startBlock
+        uint256 _startBlock,
+        uint256 _startReleaseBlockNum,
+        uint256 _releaseBlocks
     ) public {
         mars = _mars;
-        devaddr = _devaddr;
-        feeAddress = _feeAddress;
+        devAddress = _devAddress;
+        pjtrAddress = _pjtrAddress;
         marsPerBlock = _marsPerBlock;
         startBlock = _startBlock;
+        lockedTokenVault = new LockedTokenVault(_mars, _startReleaseBlockNum, _releaseBlocks);
     }
 
     function poolLength() external view returns (uint256) {
@@ -99,8 +105,7 @@ contract MasterChef is Ownable, ReentrancyGuard {
     }
 
     // Add a new lp to the pool. Can only be called by the owner.
-    function add(uint256 _allocPoint, IBEP20 _lpToken, uint16 _depositFeeBP, bool _withUpdate) public onlyOwner nonDuplicated(_lpToken) {
-        require(_depositFeeBP <= 10000, "add: invalid deposit fee basis points");
+    function add(uint256 _allocPoint, IBEP20 _lpToken, bool _withUpdate) public onlyOwner nonDuplicated(_lpToken) {
         if (_withUpdate) {
             massUpdatePools();
         }
@@ -111,24 +116,21 @@ contract MasterChef is Ownable, ReentrancyGuard {
         lpToken : _lpToken,
         allocPoint : _allocPoint,
         lastRewardBlock : lastRewardBlock,
-        accMarsPerShare : 0,
-        depositFeeBP : _depositFeeBP
+        accMarsPerShare : 0
         }));
     }
 
     // Update the given pool's Mars allocation point and deposit fee. Can only be called by the owner.
-    function set(uint256 _pid, uint256 _allocPoint, uint16 _depositFeeBP, bool _withUpdate) public onlyOwner {
-        require(_depositFeeBP <= 10000, "set: invalid deposit fee basis points");
+    function set(uint256 _pid, uint256 _allocPoint, bool _withUpdate) public onlyOwner {
         if (_withUpdate) {
             massUpdatePools();
         }
         totalAllocPoint = totalAllocPoint.sub(poolInfo[_pid].allocPoint).add(_allocPoint);
         poolInfo[_pid].allocPoint = _allocPoint;
-        poolInfo[_pid].depositFeeBP = _depositFeeBP;
     }
 
     // Return reward multiplier over the given _from to _to block.
-    function getMultiplier(uint256 _from, uint256 _to) public view returns (uint256) {
+    function getMultiplier(uint256 _from, uint256 _to) public pure returns (uint256) {
         return _to.sub(_from).mul(BONUS_MULTIPLIER);
     }
 
@@ -165,11 +167,16 @@ contract MasterChef is Ownable, ReentrancyGuard {
             pool.lastRewardBlock = block.number;
             return;
         }
+        (uint256 accDev, uint256 accPjtr, uint256 accShare) = (6, 11, 70);
         uint256 multiplier = getMultiplier(pool.lastRewardBlock, block.number);
         uint256 marsReward = multiplier.mul(marsPerBlock).mul(pool.allocPoint).div(totalAllocPoint);
-        mars.mint(devaddr, marsReward.div(10));
-        mars.mint(address(this), marsReward);
-        pool.accMarsPerShare = pool.accMarsPerShare.add(marsReward.mul(1e12).div(lpSupply));
+        uint256 devFee = marsReward.mul(accDev).div(accDev.add(accPjtr).add(accShare));
+        uint256 pjtrFee = marsReward.mul(accPjtr).div(accDev.add(accPjtr).add(accShare));
+        uint256 shareReward = marsReward.sub(devFee).sub(pjtrFee);
+        mars.mint(devAddress, devFee);
+        mars.mint(pjtrAddress, pjtrFee);
+        mars.mint(address(this), shareReward);
+        pool.accMarsPerShare = pool.accMarsPerShare.add(shareReward.mul(1e12).div(lpSupply));
         pool.lastRewardBlock = block.number;
     }
 
@@ -181,18 +188,15 @@ contract MasterChef is Ownable, ReentrancyGuard {
         if (user.amount > 0) {
             uint256 pending = user.amount.mul(pool.accMarsPerShare).div(1e12).sub(user.rewardDebt);
             if (pending > 0) {
-                safeMarsTransfer(msg.sender, pending);
+                uint256 pending30Percent = pending.mul(3).div(10);
+                safeMarsTransfer(msg.sender, pending30Percent);
+                
+                lockedTokenVault.lock(address(msg.sender), pending.sub(pending30Percent));
             }
         }
         if (_amount > 0) {
             pool.lpToken.safeTransferFrom(address(msg.sender), address(this), _amount);
-            if (pool.depositFeeBP > 0) {
-                uint256 depositFee = _amount.mul(pool.depositFeeBP).div(10000);
-                pool.lpToken.safeTransfer(feeAddress, depositFee);
-                user.amount = user.amount.add(_amount).sub(depositFee);
-            } else {
-                user.amount = user.amount.add(_amount);
-            }
+            user.amount = user.amount.add(_amount);
         }
         user.rewardDebt = user.amount.mul(pool.accMarsPerShare).div(1e12);
         emit Deposit(msg.sender, _pid, _amount);
@@ -240,16 +244,16 @@ contract MasterChef is Ownable, ReentrancyGuard {
     }
 
     // Update dev address by the previous dev.
-    function dev(address _devaddr) public {
-        require(msg.sender == devaddr, "dev: wut?");
-        devaddr = _devaddr;
-        emit SetDevAddress(msg.sender, _devaddr);
+    function setDevAddress(address _devAddress) public {
+        require(msg.sender == devAddress, "dev: wut?");
+        devAddress = _devAddress;
+        emit SetDevAddress(msg.sender, _devAddress);
     }
 
-    function setFeeAddress(address _feeAddress) public {
-        require(msg.sender == feeAddress, "setFeeAddress: FORBIDDEN");
-        feeAddress = _feeAddress;
-        emit SetFeeAddress(msg.sender, _feeAddress);
+    function setPjtrAddress(address _pjtrAddress) public {
+        require(msg.sender == pjtrAddress, "setFeeAddress: FORBIDDEN");
+        pjtrAddress = _pjtrAddress;
+        emit SetPjtrAddress(msg.sender, _pjtrAddress);
     }
 
     //Pancake has to add hidden dummy pools inorder to alter the emission, here we make it simple and transparent to all.
