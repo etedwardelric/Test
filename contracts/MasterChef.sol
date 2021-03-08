@@ -69,6 +69,8 @@ contract MasterChef is Ownable, ReentrancyGuard {
     uint256 public totalAllocPoint = 0;
     // The block number when Mars mining starts.
     uint256 public startBlock;
+    // The block number when Mars mining ends.
+    uint256 public endBlock;
 
     event Deposit(address indexed user, uint256 indexed pid, uint256 amount);
     event Withdraw(address indexed user, uint256 indexed pid, uint256 amount);
@@ -79,19 +81,20 @@ contract MasterChef is Ownable, ReentrancyGuard {
 
     constructor(
         MarsToken _mars,
+        LockedTokenVault _lockedTokenVault,
         address _devAddress,
         address _pjtrAddress,
         uint256 _marsPerBlock,
         uint256 _startBlock,
-        uint256 _startReleaseBlockNum,
-        uint256 _releaseBlocks
+        uint256 _endBlock
     ) public {
         mars = _mars;
+        lockedTokenVault = _lockedTokenVault;
         devAddress = _devAddress;
         pjtrAddress = _pjtrAddress;
         marsPerBlock = _marsPerBlock;
         startBlock = _startBlock;
-        lockedTokenVault = new LockedTokenVault(_mars, _startReleaseBlockNum, _releaseBlocks);
+        endBlock = _endBlock;
     }
 
     function poolLength() external view returns (uint256) {
@@ -105,7 +108,7 @@ contract MasterChef is Ownable, ReentrancyGuard {
     }
 
     // Add a new lp to the pool. Can only be called by the owner.
-    function add(uint256 _allocPoint, IBEP20 _lpToken, bool _withUpdate) public onlyOwner nonDuplicated(_lpToken) {
+    function addPool(uint256 _allocPoint, IBEP20 _lpToken, bool _withUpdate) public onlyOwner nonDuplicated(_lpToken) {
         if (_withUpdate) {
             massUpdatePools();
         }
@@ -121,7 +124,7 @@ contract MasterChef is Ownable, ReentrancyGuard {
     }
 
     // Update the given pool's Mars allocation point and deposit fee. Can only be called by the owner.
-    function set(uint256 _pid, uint256 _allocPoint, bool _withUpdate) public onlyOwner {
+    function setPool(uint256 _pid, uint256 _allocPoint, bool _withUpdate) public onlyOwner {
         if (_withUpdate) {
             massUpdatePools();
         }
@@ -157,15 +160,18 @@ contract MasterChef is Ownable, ReentrancyGuard {
     }
 
     // Update reward variables of the given pool to be up-to-date.
-    function updatePool(uint256 _pid) public {
+    function updatePool(uint256 _pid) public returns (bool) {
         PoolInfo storage pool = poolInfo[_pid];
         if (block.number <= pool.lastRewardBlock) {
-            return;
+            return false;
+        }
+        if (block.number > endBlock) {
+            return false;
         }
         uint256 lpSupply = pool.lpToken.balanceOf(address(this));
         if (lpSupply == 0 || pool.allocPoint == 0) {
             pool.lastRewardBlock = block.number;
-            return;
+            return false;
         }
         (uint256 accDev, uint256 accPjtr, uint256 accShare) = (6, 11, 70);
         uint256 multiplier = getMultiplier(pool.lastRewardBlock, block.number);
@@ -178,20 +184,21 @@ contract MasterChef is Ownable, ReentrancyGuard {
         mars.mint(address(this), shareReward);
         pool.accMarsPerShare = pool.accMarsPerShare.add(shareReward.mul(1e12).div(lpSupply));
         pool.lastRewardBlock = block.number;
+        return true;
     }
 
     // Deposit LP tokens to MasterChef for Mars allocation.
     function deposit(uint256 _pid, uint256 _amount) public nonReentrant {
         PoolInfo storage pool = poolInfo[_pid];
         UserInfo storage user = userInfo[_pid][msg.sender];
-        updatePool(_pid);
-        if (user.amount > 0) {
+        bool minted = updatePool(_pid);
+        if (minted && user.amount > 0) {
             uint256 pending = user.amount.mul(pool.accMarsPerShare).div(1e12).sub(user.rewardDebt);
             if (pending > 0) {
                 uint256 pending30Percent = pending.mul(3).div(10);
                 safeMarsTransfer(msg.sender, pending30Percent);
-                
-                lockedTokenVault.lock(address(msg.sender), pending.sub(pending30Percent));
+                safeMarsTransfer(address(lockedTokenVault), pending.sub(pending30Percent));
+                lockedTokenVault.lockToken(address(msg.sender), pending.sub(pending30Percent));
             }
         }
         if (_amount > 0) {
@@ -207,10 +214,15 @@ contract MasterChef is Ownable, ReentrancyGuard {
         PoolInfo storage pool = poolInfo[_pid];
         UserInfo storage user = userInfo[_pid][msg.sender];
         require(user.amount >= _amount, "withdraw: not good");
-        updatePool(_pid);
-        uint256 pending = user.amount.mul(pool.accMarsPerShare).div(1e12).sub(user.rewardDebt);
-        if (pending > 0) {
-            safeMarsTransfer(msg.sender, pending);
+        bool minted = updatePool(_pid);
+        if (minted && user.amount > 0) {
+            uint256 pending = user.amount.mul(pool.accMarsPerShare).div(1e12).sub(user.rewardDebt);
+            if (pending > 0) {
+                uint256 pending30Percent = pending.mul(3).div(10);
+                safeMarsTransfer(msg.sender, pending30Percent);
+                safeMarsTransfer(address(lockedTokenVault), pending.sub(pending30Percent));
+                lockedTokenVault.lockToken(address(msg.sender), pending.sub(pending30Percent));
+            }
         }
         if (_amount > 0) {
             user.amount = user.amount.sub(_amount);
