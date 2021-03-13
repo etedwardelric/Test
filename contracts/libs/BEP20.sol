@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 
-pragma solidity ^0.8.0;
+pragma solidity ^0.7.6;
 
-import 'https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/access/Ownable.sol';
-import 'https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/utils/Context.sol';
+import '@openzeppelin/contracts/access/Ownable.sol';
+import '@openzeppelin/contracts/utils/Context.sol';
 import './IBEP20.sol';
-import 'https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/utils/math/SafeMath.sol';
+import '@openzeppelin/contracts/math/SafeMath.sol';
 
 /**
  * @dev Implementation of the {IBEP20} interface.
@@ -57,13 +57,6 @@ contract BEP20 is Context, IBEP20, Ownable {
         _name = name_;
         _symbol = symbol_;
         _decimals = 18;
-    }
-
-    /**
-     * @dev Returns the bep token owner.
-     */
-    function getOwner() external override view returns (address) {
-        return owner();
     }
 
     /**

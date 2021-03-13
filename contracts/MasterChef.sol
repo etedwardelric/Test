@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT
 
-pragma solidity ^0.8.0;
+pragma solidity ^0.7.6;
 
-import {SafeMath} from "https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/utils/math/SafeMath.sol";
-import {Ownable} from "https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/access/Ownable.sol";
-import {ReentrancyGuard} from "https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/security/ReentrancyGuard.sol";
+import {SafeMath} from "@openzeppelin/contracts/math/SafeMath.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 import {IBEP20} from "./libs/SafeBEP20.sol";
 import {SafeBEP20} from "./libs/SafeBEP20.sol";
@@ -165,7 +165,7 @@ contract MasterChef is Ownable, ReentrancyGuard {
         if (block.number <= pool.lastRewardBlock) {
             return false;
         }
-        if (block.number > endBlock) {
+        if (pool.lastRewardBlock >= endBlock) {
             return false;
         }
         uint256 lpSupply = pool.lpToken.balanceOf(address(this));
@@ -174,7 +174,7 @@ contract MasterChef is Ownable, ReentrancyGuard {
             return false;
         }
         (uint256 accDev, uint256 accPjtr, uint256 accShare) = (6, 11, 70);
-        uint256 multiplier = getMultiplier(pool.lastRewardBlock, block.number);
+        uint256 multiplier = getMultiplier(pool.lastRewardBlock, block.number >= endBlock ? endBlock : block.number);
         uint256 marsReward = multiplier.mul(marsPerBlock).mul(pool.allocPoint).div(totalAllocPoint);
         uint256 devFee = marsReward.mul(accDev).div(accDev.add(accPjtr).add(accShare));
         uint256 pjtrFee = marsReward.mul(accPjtr).div(accDev.add(accPjtr).add(accShare));
@@ -183,7 +183,7 @@ contract MasterChef is Ownable, ReentrancyGuard {
         mars.mint(pjtrAddress, pjtrFee);
         mars.mint(address(this), shareReward);
         pool.accMarsPerShare = pool.accMarsPerShare.add(shareReward.mul(1e12).div(lpSupply));
-        pool.lastRewardBlock = block.number;
+        pool.lastRewardBlock = block.number >= endBlock ? endBlock : block.number;
         return true;
     }
 

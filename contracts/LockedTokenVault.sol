@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: MIT
 
-pragma solidity ^0.8.0;
+pragma solidity ^0.7.6;
 
-import "https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/utils/math/SafeMath.sol";
-import 'https://github.com/OpenZeppelin/openzeppelin-contracts/blob/master/contracts/access/Ownable.sol';
+import "@openzeppelin/contracts/math/SafeMath.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
 import {IBEP20, SafeBEP20} from "./libs/SafeBEP20.sol";
-
 
 contract LockedTokenVault is Ownable {
     using SafeMath for uint256;
     using SafeBEP20 for IBEP20;
 
-    IBEP20 token;
+    IBEP20 public token;
+    address public masterChef;
 
     mapping(address => uint256) internal originBalances;
     mapping(address => uint256) internal claimedBalances;
@@ -30,32 +30,37 @@ contract LockedTokenVault is Ownable {
         releaseBlocks = _releaseBlocks;
     }
 
+
+    event LockToken(address indexed holder, uint256 origin, uint256 claimed, uint256 amount);
+    event TransferLockedToken(address indexed from, address indexed to, uint256 origin, uint256 claimed);
     event Claim(address indexed holder, uint256 origin, uint256 claimed, uint256 amount);
 
-    modifier beforeStartRelease() {
-        require(block.number < startReleaseBlockNum, "RELEASE START");
-        _;
+    function setMasterChef(address _masterChef) public onlyOwner {
+        require(_masterChef != address(0), "zero address");
+        masterChef = _masterChef;
     }
 
-    modifier afterStartRelease() {
-        require(block.number >= startReleaseBlockNum, "RELEASE NOT START");
-        _;
-    }
-
-    function lockToken(address holder, uint256 amount) external onlyOwner
-    {
-        require(holder != address(0), "bad");
+    function lockToken(address holder, uint256 amount) external {
+        require(holder != address(0), "zero address");
+        require(msg.sender == masterChef, "not masterchef");
         // for saving gas, no event for grant
         originBalances[holder] = originBalances[holder].add(amount);
         unclaimedAmount = unclaimedAmount.add(amount);
+        emit LockToken(holder, originBalances[holder], claimedBalances[holder], amount);
     }
 
     function transferLockedToken(address to) external {
-        originBalances[to] = originBalances[to].add(originBalances[msg.sender]);
-        claimedBalances[to] = claimedBalances[to].add(claimedBalances[msg.sender]);
+        uint256 originBalance = originBalances[msg.sender];
+        uint256 claimedBalance = claimedBalances[msg.sender];
 
         originBalances[msg.sender] = 0;
         claimedBalances[msg.sender] = 0;
+
+        originBalances[to] = originBalances[to].add(originBalance);
+        claimedBalances[to] = claimedBalances[to].add(claimedBalance);
+
+        
+        emit TransferLockedToken(msg.sender, to, originBalance, claimedBalance);
     }
 
     function claim() external {

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-pragma solidity ^0.8.0;
+pragma solidity ^0.7.6;
 
 interface IBEP20 {
     /**
@@ -22,11 +22,6 @@ interface IBEP20 {
      * @dev Returns the token name.
      */
     function name() external view returns (string memory);
-
-    /**
-     * @dev Returns the bep token owner.
-     */
-    function getOwner() external view returns (address);
 
     /**
      * @dev Returns the amount of tokens owned by `account`.
